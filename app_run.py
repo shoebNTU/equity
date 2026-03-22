@@ -134,7 +134,7 @@ st.title('Timepass')
 
 st.sidebar.title('Search Parameters')
 
-country = st.sidebar.selectbox('Please select `Country`', options=['Australia','United States'], index=0)
+country = st.sidebar.selectbox('Please select `Country`', options=['United States'], index=0)
 
  # read dataframe
 if country == 'Australia':
