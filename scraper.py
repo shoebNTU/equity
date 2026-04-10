@@ -14,16 +14,16 @@ OUTPUT_FILE = 'latest_nasdaq.csv'
 CURR_STR = 'USD'
 EXCHANGE_CACHE = {}
 
-# Configure a robust requests session with automatic retries for Rate Limits (HTTP 429)
-session = requests.Session()
+# Configure a robust requests session ONLY for the Nasdaq CSV download
+nasdaq_session = requests.Session()
 retry = Retry(
     total=5,
-    backoff_factor=2, # Will wait 2, 4, 8, 16 seconds between retries
+    backoff_factor=2, 
     status_forcelist=[429, 500, 502, 503, 504]
 )
 adapter = HTTPAdapter(max_retries=retry)
-session.mount('http://', adapter)
-session.mount('https://', adapter)
+nasdaq_session.mount('http://', adapter)
+nasdaq_session.mount('https://', adapter)
 
 # %% 1. DYNAMICALLY DOWNLOAD NASDAQ SCREENER DATA
 print("Downloading latest stock screener data directly from NASDAQ...")
@@ -31,11 +31,10 @@ headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
     "Accept": "application/json, text/plain, */*"
 }
-# This is the backend API URL the Nasdaq website uses to generate the CSV
 nasdaq_url = "https://api.nasdaq.com/api/screener/stocks?tableonly=true&limit=25&offset=0&download=true"
 
 try:
-    response = requests.get(nasdaq_url, headers=headers, timeout=15)
+    response = nasdaq_session.get(nasdaq_url, headers=headers, timeout=15)
     response.raise_for_status()
     data = response.json()['data']['rows']
     df = pd.DataFrame(data)
@@ -44,15 +43,12 @@ except Exception as e:
     sys.exit(1)
 
 # %% 2. CLEAN AND PREPARE DATA
-# Map JSON columns to match your expectations
 df.rename(columns={'symbol': 'Symbol', 'marketCap': 'Market Cap', 'name': 'Name', 'industry': 'Industry'}, inplace=True)
 
-# Format Market Cap and filter invalid/warrant stocks
 df['Market Cap'] = pd.to_numeric(df['Market Cap'].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
 df = df[df['Market Cap'] > 0]
 df = df[~df['Name'].str.contains(' Warrant', case=False, na=False)]
 
-# Fix symbols for yfinance (e.g., replacing slashes with hyphens like BRK/B -> BRK-B)
 df['Symbol'] = df['Symbol'].astype(str).str.replace('/', '-').str.strip()
 df.reset_index(drop=True, inplace=True)
 
@@ -64,7 +60,7 @@ def get_exchange_rate(base_currency, target_currency):
     pair = f"{base_currency}{target_currency}=X"
     if pair not in EXCHANGE_CACHE:
         yesterday = datetime.date.today() - datetime.timedelta(days=5)
-        # Download once and cache it to prevent thousands of redundant calls
+        # Let yf handle the download naturally
         data = yf.download(pair, start=yesterday, end=datetime.date.today(), progress=False)
         if not data.empty:
             EXCHANGE_CACHE[pair] = data.iloc[-1].iloc[0]
@@ -74,11 +70,10 @@ def get_exchange_rate(base_currency, target_currency):
     return EXCHANGE_CACHE[pair]
 
 def get_data(ticker_in, to_get_info):
-    ticker = yf.Ticker(ticker_in, session=session)
+    # FIXED: Removed session=session. We let yfinance use its native curl_cffi handling.
+    ticker = yf.Ticker(ticker_in)
     info_ = ticker.info
     
-    # Distinguish between API Rate Limit failures and genuine Dead Tickers
-    # Dead tickers return empty JSON. We label them 'Invalid' so they don't loop endlessly.
     if not info_ or 'symbol' not in info_:
         return ['Invalid'] * 8 + ['Invalid'] * len(to_get_info)
             
@@ -143,7 +138,6 @@ def get_data(ticker_in, to_get_info):
     else:
         non_compliant_ratio = 0.0
 
-    # Extra Info extraction safely
     info_list =[info_.get(i) for i in to_get_info]
                 
     if market_cap > 0:
@@ -154,19 +148,18 @@ def get_data(ticker_in, to_get_info):
                 ret_int_income, ret_total_income, ret_market_cap, ret_total_cash, ret_total_debt] + info_list
 
 def fetch_ticker_robust(ticker_in, to_get_info, max_retries=3):
-    # Python-level secondary exponential backoff 
     for attempt in range(max_retries):
         try:
             return get_data(ticker_in, to_get_info)
         except Exception as e:
             if "404" in str(e) or "No data found" in str(e):
-                return ['Invalid'] * 8 + ['Invalid'] * len(to_get_info)
+                return['Invalid'] * 8 + ['Invalid'] * len(to_get_info)
             
             if attempt < max_retries - 1:
-                time.sleep(2 ** (attempt + 1)) # Wait 2, 4 seconds before trying again
+                time.sleep(2 ** (attempt + 1)) 
             else:
                 print(f"Failed completely for {ticker_in}: {e}")
-                return ['Not Found'] * 8 + ['Not Found'] * len(to_get_info)
+                return['Not Found'] * 8 + ['Not Found'] * len(to_get_info)
 
 # %% 4. MAIN PROCESSING LOOP
 to_get_info =['shortName', 'longBusinessSummary', 'lastDividendValue', 'currentPrice', 'targetHighPrice', 'targetLowPrice',
@@ -182,7 +175,7 @@ print(f"Starting to fetch API data for {total_tickers} valid tickers...")
 for i, row in df.iterrows():
     data_list.append(fetch_ticker_robust(row['Symbol'], to_get_info))
     
-    # Mild pause every 200 requests to play nice with Yahoo's limits
+    # Mild pause to play nice with Yahoo's limits
     if i % 200 == 0 and i > 0:
         print(f"Processed {i}/{total_tickers} tickers...")
         time.sleep(5)
@@ -190,7 +183,6 @@ for i, row in df.iterrows():
 df[cols + to_get_info] = data_list
 
 # %% 5. RETRY LOGIC FOR MISSING DATA
-# We only retry "Not Found" (API limit failure), ignoring "Invalid" (Dead ticker)
 df_not_found = df[df['longBusinessSummary'] == 'Not Found']
 
 max_retry_rounds = 3
@@ -214,7 +206,7 @@ missing_count = len(df_not_found)
 if missing_count < 5:
     print(f"SUCCESS: Only {missing_count} tickers missing due to API errors. Saving output to {OUTPUT_FILE}.")
     df.to_csv(OUTPUT_FILE, index=False)
-    sys.exit(0) # Tells GitHub Actions the job was successful
+    sys.exit(0)
 else:
     print(f"FAILURE: {missing_count} tickers still missing after retries. Threshold is < 5.")
-    sys.exit(1) # Tells GitHub Actions to abort, ensuring bad data is not deployed
+    sys.exit(1)
