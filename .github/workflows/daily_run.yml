@@ -1,0 +1,44 @@
+name: Daily Stock Data Scraper
+
+on:
+  schedule:
+    - cron: '0 0 * * *' # Runs daily at midnight UTC
+  workflow_dispatch: # Allows manual triggers
+
+# Grants permission to create/overwrite GitHub Releases
+permissions:
+  contents: write
+
+jobs:
+  run-scraper:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # urllib3 is used for the exponential backoff retries
+          pip install yfinance pandas numpy requests urllib3
+
+      - name: Run Python script
+        run: python scraper.py
+
+      - name: Upload to GitHub Releases
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view daily-data > /dev/null 2>&1; then
+            echo "Release exists. Overwriting the asset..."
+            gh release upload daily-data latest_nasdaq.csv --clobber
+          else
+            echo "Release does not exist. Creating it now..."
+            gh release create daily-data latest_nasdaq.csv --title "Daily Nasdaq Data" --notes "Automated daily CSV update."
+          fi
