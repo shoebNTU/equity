@@ -5,6 +5,15 @@ import yfinance as yf
 from PIL import Image
 import datetime
 
+# === DISCLAIMER ===
+st.warning(
+    """
+    **Disclaimer**\n
+    This project is for educational and informational purposes only. I am not a certified financial or Halal compliance expert. The information and filters provided by this app should not be considered financial advice or a guarantee of Halal status. Please conduct your own research and consult qualified professionals before making any investment decisions. I accept no liability for any financial actions taken based on the use of this app. This is simply a personal hobby project.
+    """,
+    icon="⚠️"
+)
+
 # --- CONFIGURATION ---
 # The URL to the static Release Asset we created in the GitHub Action
 GITHUB_RELEASE_URL = "https://github.com/shoebNTU/equity/releases/download/daily-data/latest_nasdaq.csv"
@@ -192,8 +201,8 @@ low_price = st.sidebar.selectbox(
 if low_price == 'Yes':
     no_analyst = st.sidebar.number_input(
         label="Min number of analyst opinions",
-        value=0,
-        min_value=0,
+        value=1,
+        min_value=1,
         help='Require at least this many analyst opinions for more reliable estimates.'
     )
 
