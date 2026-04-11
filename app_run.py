@@ -6,13 +6,12 @@ from PIL import Image
 import datetime
 
 # === DISCLAIMER ===
-st.warning(
-    """
-    **Disclaimer**\n
-    This project is for educational and informational purposes only. I am not a certified financial or Halal compliance expert. The information and filters provided by this app should not be considered financial advice or a guarantee of Halal status. Please conduct your own research and consult qualified professionals before making any investment decisions. I accept no liability for any financial actions taken based on the use of this app. This is simply a personal hobby project.
-    """,
-    icon="⚠️"
-)
+with st.expander("⚠️ Disclaimer", expanded=False):
+    st.markdown(
+        """
+        This project is for educational and informational purposes only. I am not a certified financial or Halal compliance expert. The information and filters provided by this app should not be considered financial advice or a guarantee of Halal status. Please conduct your own research and consult qualified professionals before making any investment decisions. I accept no liability for any financial actions taken based on the use of this app. This is simply a personal hobby project.
+        """
+    )
 
 # --- CONFIGURATION ---
 # The URL to the static Release Asset we created in the GitHub Action
