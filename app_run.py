@@ -353,13 +353,7 @@ with st.expander('Ticker Query for Halal Check'):
                     st.write(f"Could not fetch news articles. ({e})")
             else:
                 st.error("Invalid Ticker Symbol. Please check and try again.")
-    st.image(Image.open('yfinance.png'), width=750)
-        if 'nc_income' in data.columns:
-            data = data[data.nc_income != 'Not Found'].reset_index(drop=True)
-        return data
-    except Exception as e:
-        st.error(f"Error loading dataset: {e}")
-        return pd.DataFrame()
+    
 
 # Synced optimizations from the daily scraper
 def get_data(ticker_in, to_get_info):
