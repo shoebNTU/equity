@@ -6,7 +6,9 @@ from PIL import Image
 import datetime
 
 
-# --- UI TITLE FIRST ---
+# --- UI LOGIC START ---
+st.set_page_config(layout="wide")
+
 st.title('Halal & Financial Stock Screener')
 
 # === DISCLAIMER ===
@@ -139,69 +141,93 @@ def get_data(ticker_in, to_get_info):
         return ['Not Found'] * 9 
 
 
-# --- UI LOGIC START ---
-st.set_page_config(layout="wide")
-
+# Load data early so sidebar can use live Industry options
+df_raw = load_data(GITHUB_RELEASE_URL)
+if df_raw.empty:
+    st.error("No data available. Please wait for the daily GitHub Action to generate the file.")
+    st.stop()
 
 st.sidebar.title('Search Parameters')
 
-st.sidebar.markdown('### Basic Search')
-name = st.sidebar.text_input(
-    'Company Name',
-    value='',
-    help='Enter part or all of a company’s name (e.g., "Apple"). Leave blank to skip.'
-).lower().strip()
-symbol = st.sidebar.text_input(
-    'Ticker',
-    value='',
-    help='Enter the stock symbol (e.g., "AAPL" for Apple). Leave blank to skip.'
-).lower().strip()
+st.sidebar.info('Tip: Hover over the ⓘ icons for explanations of each filter.')
 
 st.sidebar.markdown('### Halal Compliance')
-halal_check = st.sidebar.selectbox(
-    label='Filter out non-Halal stocks?',
-    options=['Yes','No'],
-    index=1,
-    help='Choose "Yes" to only show stocks that meet Halal (Islamic finance) criteria.'
+halal_check = st.sidebar.checkbox(
+    'Show only Halal-compliant stocks',
+    value=False,
+    help='Filter to only show stocks that pass all three Halal criteria (income ratio, cash, debt).'
 )
 
-st.sidebar.markdown('### Keyword Search')
-no_of_search = st.sidebar.number_input(
-    label='Number of keywords to search (optional)',
-    value=0,
-    min_value=0,
-    help='How many keywords do you want to search for in company descriptions?'
+st.sidebar.markdown('### Industry')
+enable_industry = st.sidebar.checkbox(
+    'Apply Industry filter',
+    value=False,
+    help='Enable to filter by industry.'
 )
-search_text =[]
-if no_of_search:
-    for i in range(no_of_search):
-        search_text.append(st.sidebar.text_input(
-            label=f"Keyword {i+1}",
-            value='',
-            key=i,
-            help='Enter a word to search for in the company’s description (e.g., "technology").'
-        ).lower().strip())
+all_industries = sorted(df_raw['Industry'].dropna().astype(str).unique().tolist()) if 'Industry' in df_raw.columns else []
+if enable_industry:
+    selected_industries = st.sidebar.multiselect(
+        'Filter by Industry',
+        options=all_industries,
+        default=[],
+        help='Select one or more industries to narrow results. Leave empty to include all.'
+    )
+else:
+    selected_industries = []
+
+st.sidebar.markdown('### Description Keywords')
+enable_keywords = st.sidebar.checkbox(
+    'Apply Keyword search',
+    value=False,
+    help='Enable to filter by keywords in company description.'
+)
+if enable_keywords:
+    st.sidebar.info('Popular keywords: cloud, AI, quantum, semiconductor, fintech, blockchain, SaaS, green, EV, pharma')
+    keywords_input = st.sidebar.text_input(
+        'Keywords (comma-separated)',
+        value='',
+        help='Search company descriptions for keywords, e.g. "cloud, semiconductor, AI".'
+    ).lower().strip()
+else:
+    keywords_input = ''
 
 st.sidebar.markdown('### Financial Filters')
-beta_value_filter = st.sidebar.number_input(
-    label='Max Beta',
-    value=0.0,
-    help='Beta measures how much a stock’s price moves compared to the market. Lower beta means less risk.'
+enable_beta = st.sidebar.checkbox(
+    'Apply Max Beta filter',
+    value=False,
+    help='Enable to filter out high-volatility stocks.'
 )
-quick_ratio_filter = st.sidebar.number_input(
-    label='Min Quick Ratio',
-    value=1.0,
-    help='Quick Ratio shows a company’s ability to pay short-term debts. Higher is safer.'
-)
+if enable_beta:
+    beta_value_filter = st.sidebar.number_input(
+        'Max Beta',
+        value=1.0,
+        help='Beta measures volatility relative to the market. Lower = more stable.'
+    )
+else:
+    beta_value_filter = None
 
-st.sidebar.markdown('### Analyst Price Filter')
-low_price = st.sidebar.selectbox(
-    label="Current Price < Analyst's Low Price?",
-    options=['Yes','No'],
-    index=1,
-    help='Choose "Yes" to find stocks whose current price is below the lowest price target set by analysts.'
+
+enable_quick_ratio = st.sidebar.checkbox(
+    'Apply Min Quick Ratio filter',
+    value=False,
+    help="Enable to filter out companies with low quick ratio."
 )
-if low_price == 'Yes':
+if enable_quick_ratio:
+    quick_ratio_filter = st.sidebar.number_input(
+        label='Min Quick Ratio',
+        value=1.0,
+        help="Quick Ratio shows a company's ability to pay short-term debts. Higher is safer."
+    )
+else:
+    quick_ratio_filter = None
+
+st.sidebar.markdown('### Analyst Price Target')
+low_price = st.sidebar.checkbox(
+    "Current price below analyst's low target",
+    value=False,
+    help='Find stocks trading below the lowest analyst price target — a potential value signal.'
+)
+if low_price:
     no_analyst = st.sidebar.number_input(
         label="Min number of analyst opinions",
         value=1,
@@ -210,13 +236,8 @@ if low_price == 'Yes':
     )
 
 st.sidebar.markdown('---')
-st.sidebar.info('Tip: Hover over the ⓘ icons for explanations of each filter.')
 submit = st.sidebar.button('Submit')
 
-df_raw = load_data(GITHUB_RELEASE_URL)
-if df_raw.empty:
-    st.error("No data available. Please wait for the daily GitHub Action to generate the file.")
-    st.stop()
 # Explicit copy to prevent mutating Streamlit's cached state
 df = df_raw.copy()
 
@@ -228,38 +249,35 @@ with st.expander('Halal calculation'):
     """)
 
 if submit:
-    # Filter Dataframe securely
-    if symbol:
-        df = df[df['Symbol'].astype(str).str.contains(symbol, case=False, na=False)]
     
     df['Industry'] = df.get('Industry', pd.Series(dtype=str)).fillna('None')
 
-    if len(df) and name:
-        df = df[df['Name'].astype(str).str.contains(name, case=False, na=False)]
+    if enable_industry and selected_industries:
+        df = df[df['Industry'].isin(selected_industries)]
 
     # Filter based on beta and quick ratio (safely coercing string values to numeric)
     df['beta_num'] = pd.to_numeric(df.get('beta'), errors='coerce')
     df['quickRatio_num'] = pd.to_numeric(df.get('quickRatio'), errors='coerce')
-    
-    df = df[(df.beta_num <= beta_value_filter) | (df.beta_num.isna())]
-    df = df[(df.quickRatio_num >= quick_ratio_filter) | (df.quickRatio_num.isna())]
 
-    # Filter industry
+    if enable_beta and beta_value_filter is not None:
+        df = df[(df.beta_num <= beta_value_filter) | (df.beta_num.isna())]
+    if enable_quick_ratio and quick_ratio_filter is not None:
+        df = df[(df.quickRatio_num >= quick_ratio_filter) | (df.quickRatio_num.isna())]
+
+    # Filter industry (exclude non-compliant sectors)
     df = df[~df['Industry'].str.contains('bio', case=False, na=False)]
 
-    if no_of_search:
-        # Replaced unsafe eval() with secure string filtering loop
-        for text in search_text:
-            if text:
-                df = df[df['Description'].astype(str).str.contains(text, case=False, na=False)]
-                
-    if halal_check == 'Yes':
+    if enable_keywords and keywords_input:
+        for kw in [k.strip() for k in keywords_input.split(',') if k.strip()]:
+            df = df[df['Description'].astype(str).str.contains(kw, case=False, na=False)]
+
+    if halal_check:
         # Safely casts strings like 'Not Found' to NaN before comparing to prevent float crash
         df = df[(pd.to_numeric(df['nc_income'], errors='coerce') < 5) & \
                 (pd.to_numeric(df['interest_bearing_securities'], errors='coerce') < 30) & \
                 (pd.to_numeric(df['interest_bearing_debt'], errors='coerce') < 30)]
         
-    if low_price == 'Yes':
+    if low_price:
         df = df[df['currentPrice'].notna() & df['targetLowPrice'].notna() & df['numberOfAnalystOpinions'].notna()].reset_index(drop=True)
         df = df[pd.to_numeric(df['numberOfAnalystOpinions'], errors='coerce') >= no_analyst]
         df = df[(pd.to_numeric(df['currentPrice'], errors='coerce') < pd.to_numeric(df['targetLowPrice'], errors='coerce'))]
