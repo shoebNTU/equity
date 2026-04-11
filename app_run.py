@@ -4,7 +4,7 @@ import numpy as np
 import yfinance as yf
 from PIL import Image
 import datetime
-
+import requests
 
 # --- UI LOGIC START ---
 st.set_page_config(layout="wide")
@@ -54,6 +54,20 @@ def load_data(file_path_or_url):
     except Exception as e:
         st.error(f"Error loading dataset: {e}")
         return pd.DataFrame()
+    
+@st.cache_data(ttl=3600)
+def get_data_update_time():
+    try:
+        response = requests.get(
+            "https://api.github.com/repos/shoebNTU/equity/releases/tags/daily-data",
+            headers={"Accept": "application/vnd.github.v3+json"}
+        )
+        if response.status_code == 200:
+            published_at = response.json().get('published_at')
+            return datetime.datetime.fromisoformat(published_at.replace('Z', '+00:00'))
+    except Exception as e:
+        print(f"Could not fetch release time: {e}")
+    return None
 
 # Synced optimizations from the daily scraper
 def get_data(ticker_in, to_get_info):
@@ -150,6 +164,12 @@ if df_raw.empty:
 st.sidebar.title('Search Parameters')
 
 st.sidebar.info('Tip: Hover over the ⓘ icons for explanations of each filter.')
+
+data_update_time = get_data_update_time()
+if data_update_time:
+    st.sidebar.info(f"📅 Data last updated: {data_update_time.strftime('%Y-%m-%d %H:%M:%S UTC')}")
+else:
+    st.sidebar.info("📅 Data update time unavailable")
 
 st.sidebar.markdown('### Halal Compliance')
 halal_check = st.sidebar.checkbox(
