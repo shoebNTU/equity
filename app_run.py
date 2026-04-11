@@ -161,7 +161,7 @@ if df_raw.empty:
     st.error("No data available. Please wait for the daily GitHub Action to generate the file.")
     st.stop()
 
-st.sidebar.title('Search Parameters')
+st.sidebar.title('Screening Filters')
 
 st.sidebar.info('Tip: Hover over the ⓘ icons for explanations of each filter.')
 
