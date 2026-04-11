@@ -5,6 +5,10 @@ import yfinance as yf
 from PIL import Image
 import datetime
 
+
+# --- UI TITLE FIRST ---
+st.title('Halal & Financial Stock Screener')
+
 # === DISCLAIMER ===
 with st.expander("⚠️ Disclaimer", expanded=False):
     st.markdown(
