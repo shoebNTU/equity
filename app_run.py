@@ -128,40 +128,85 @@ def get_data(ticker_in, to_get_info):
 
 # --- UI LOGIC START ---
 st.set_page_config(layout="wide")
-st.title('Timepass')
+st.title('Halal & Financial Stock Screener')
+
 
 st.sidebar.title('Search Parameters')
 
-df_raw = load_data(GITHUB_RELEASE_URL)
+st.sidebar.markdown('### Basic Search')
+name = st.sidebar.text_input(
+    'Company Name',
+    value='',
+    help='Enter part or all of a company’s name (e.g., "Apple"). Leave blank to skip.'
+).lower().strip()
+symbol = st.sidebar.text_input(
+    'Ticker',
+    value='',
+    help='Enter the stock symbol (e.g., "AAPL" for Apple). Leave blank to skip.'
+).lower().strip()
 
-if df_raw.empty:
-    st.error("No data available. Please wait for the daily GitHub Action to generate the file.")
-    st.stop()
+st.sidebar.markdown('### Halal Compliance')
+halal_check = st.sidebar.selectbox(
+    label='Filter out non-Halal stocks?',
+    options=['Yes','No'],
+    index=1,
+    help='Choose "Yes" to only show stocks that meet Halal (Islamic finance) criteria.'
+)
 
-# Explicit copy to prevent mutating Streamlit's cached state
-df = df_raw.copy()
-
-name = st.sidebar.text_input('Please enter `Name` of the company (optional)', value='').lower().strip()
-symbol = st.sidebar.text_input('Please enter `Ticker` of the company (optional)', value='').lower().strip()
-
-halal_check = st.sidebar.selectbox(label='Do you want to filter out non-Halal stocks?', options=['Yes','No'], index=1)
-
-no_of_search = st.sidebar.number_input(label='Please enter `number` of `keywords` to be searched (optional)', value=0, min_value=0)
+st.sidebar.markdown('### Keyword Search')
+no_of_search = st.sidebar.number_input(
+    label='Number of keywords to search (optional)',
+    value=0,
+    min_value=0,
+    help='How many keywords do you want to search for in company descriptions?'
+)
 search_text =[]
 if no_of_search:
     for i in range(no_of_search):
-        search_text.append(st.sidebar.text_input(label="Please enter `keyword` to be searched in company's description", value='', key=i).lower().strip())
+        search_text.append(st.sidebar.text_input(
+            label=f"Keyword {i+1}",
+            value='',
+            key=i,
+            help='Enter a word to search for in the company’s description (e.g., "technology").'
+        ).lower().strip())
 
-beta_value_filter = st.sidebar.number_input(label='Please enter `Beta` value to filter', value=0.0)
-quick_ratio_filter = st.sidebar.number_input(label='Please enter `Quick Ratio` value to filter', value=1.0)
+st.sidebar.markdown('### Financial Filters')
+beta_value_filter = st.sidebar.number_input(
+    label='Max Beta',
+    value=0.0,
+    help='Beta measures how much a stock’s price moves compared to the market. Lower beta means less risk.'
+)
+quick_ratio_filter = st.sidebar.number_input(
+    label='Min Quick Ratio',
+    value=1.0,
+    help='Quick Ratio shows a company’s ability to pay short-term debts. Higher is safer.'
+)
 
-low_price = st.sidebar.selectbox(label="Current Price < Analyst's Low Price?", options=['Yes','No'], index=1)
-
+st.sidebar.markdown('### Analyst Price Filter')
+low_price = st.sidebar.selectbox(
+    label="Current Price < Analyst's Low Price?",
+    options=['Yes','No'],
+    index=1,
+    help='Choose "Yes" to find stocks whose current price is below the lowest price target set by analysts.'
+)
 if low_price == 'Yes':
-    no_analyst = st.sidebar.number_input(label="Please enter no. of analyst's opinions", value=0, min_value=0)
+    no_analyst = st.sidebar.number_input(
+        label="Min number of analyst opinions",
+        value=0,
+        min_value=0,
+        help='Require at least this many analyst opinions for more reliable estimates.'
+    )
 
 st.sidebar.markdown('---')
+st.sidebar.info('Tip: Hover over the ⓘ icons for explanations of each filter.')
 submit = st.sidebar.button('Submit')
+
+df_raw = load_data(GITHUB_RELEASE_URL)
+if df_raw.empty:
+    st.error("No data available. Please wait for the daily GitHub Action to generate the file.")
+    st.stop()
+# Explicit copy to prevent mutating Streamlit's cached state
+df = df_raw.copy()
 
 with st.expander('Halal calculation'):
     st.info("""
