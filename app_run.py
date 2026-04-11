@@ -138,9 +138,9 @@ def get_data(ticker_in, to_get_info):
         print(f'Not found {ticker_in}: {e}')
         return ['Not Found'] * 9 
 
+
 # --- UI LOGIC START ---
 st.set_page_config(layout="wide")
-st.title('Halal & Financial Stock Screener')
 
 
 st.sidebar.title('Search Parameters')
