@@ -1,4 +1,3 @@
-# %%
 import yfinance as yf
 import pandas as pd
 import numpy as np
@@ -6,10 +5,23 @@ import datetime
 import time
 import requests
 import sys
+import logging
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-# %% CONFIGURATION
+# %% LOGGING CONFIGURATION
+# Set up professional logging format
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s | %(levelname)-8s | %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+    handlers=[
+        logging.StreamHandler(sys.stdout) # Ensures GitHub Actions captures the output properly
+    ]
+)
+logger = logging.getLogger(__name__)
+
+# %% GLOBAL CONFIGURATION
 OUTPUT_FILE = 'latest_nasdaq.csv'
 CURR_STR = 'USD'
 EXCHANGE_CACHE = {}
@@ -26,7 +38,7 @@ nasdaq_session.mount('http://', adapter)
 nasdaq_session.mount('https://', adapter)
 
 # %% 1. DYNAMICALLY DOWNLOAD NASDAQ SCREENER DATA
-print("Downloading latest stock screener data directly from NASDAQ...")
+logger.info("Connecting to NASDAQ API to download latest stock screener data...")
 headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
     "Accept": "application/json, text/plain, */*"
@@ -38,11 +50,13 @@ try:
     response.raise_for_status()
     data = response.json()['data']['rows']
     df = pd.DataFrame(data)
+    logger.info(f"Successfully downloaded {len(df)} initial rows from NASDAQ.")
 except Exception as e:
-    print(f"Failed to download NASDAQ list: {e}")
+    logger.error(f"Failed to download NASDAQ list: {e}")
     sys.exit(1)
 
 # %% 2. CLEAN AND PREPARE DATA
+logger.info("Cleaning and formatting NASDAQ data...")
 df.rename(columns={'symbol': 'Symbol', 'marketCap': 'Market Cap', 'name': 'Name', 'industry': 'Industry'}, inplace=True)
 
 df['Market Cap'] = pd.to_numeric(df['Market Cap'].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
@@ -51,6 +65,7 @@ df = df[~df['Name'].str.contains(' Warrant', case=False, na=False)]
 
 df['Symbol'] = df['Symbol'].astype(str).str.replace('/', '-').str.strip()
 df.reset_index(drop=True, inplace=True)
+logger.info(f"Data cleaned. {len(df)} valid tickers remain to be processed.")
 
 # %% 3. HELPER FUNCTIONS
 def get_exchange_rate(base_currency, target_currency):
@@ -64,13 +79,15 @@ def get_exchange_rate(base_currency, target_currency):
         data = yf.download(pair, start=yesterday, end=datetime.date.today(), progress=False)
         if not data.empty:
             EXCHANGE_CACHE[pair] = data.iloc[-1].iloc[0]
+            logger.info(f"Cached new exchange rate for {pair}: {EXCHANGE_CACHE[pair]:.4f}")
         else:
+            logger.warning(f"Failed to get exchange rate for {pair}. Defaulting to 1.0")
             EXCHANGE_CACHE[pair] = 1.0
             
     return EXCHANGE_CACHE[pair]
 
 def get_data(ticker_in, to_get_info):
-    # FIXED: Removed session=session. We let yfinance use its native curl_cffi handling.
+    # Let yfinance use its native curl_cffi handling.
     ticker = yf.Ticker(ticker_in)
     info_ = ticker.info
     
@@ -138,13 +155,13 @@ def get_data(ticker_in, to_get_info):
     else:
         non_compliant_ratio = 0.0
 
-    info_list =[info_.get(i) for i in to_get_info]
+    info_list = [info_.get(i) for i in to_get_info]
                 
     if market_cap > 0:
-        return[np.round(100*non_compliant_ratio, 2), np.round(100*total_cash/market_cap, 2), np.round(100*total_debt/market_cap, 2),
+        return [np.round(100*non_compliant_ratio, 2), np.round(100*total_cash/market_cap, 2), np.round(100*total_debt/market_cap, 2),
                 ret_int_income, ret_total_income, ret_market_cap, ret_total_cash, ret_total_debt] + info_list
     else:
-        return[np.round(100*non_compliant_ratio, 2), 0.0, 0.0, 
+        return [np.round(100*non_compliant_ratio, 2), 0.0, 0.0, 
                 ret_int_income, ret_total_income, ret_market_cap, ret_total_cash, ret_total_debt] + info_list
 
 def fetch_ticker_robust(ticker_in, to_get_info, max_retries=3):
@@ -153,34 +170,37 @@ def fetch_ticker_robust(ticker_in, to_get_info, max_retries=3):
             return get_data(ticker_in, to_get_info)
         except Exception as e:
             if "404" in str(e) or "No data found" in str(e):
-                return['Invalid'] * 8 + ['Invalid'] * len(to_get_info)
+                return ['Invalid'] * 8 + ['Invalid'] * len(to_get_info)
             
             if attempt < max_retries - 1:
-                time.sleep(2 ** (attempt + 1)) 
+                sleep_time = 2 ** (attempt + 1)
+                logger.debug(f"Transient error for {ticker_in}: {e}. Retrying in {sleep_time}s...")
+                time.sleep(sleep_time) 
             else:
-                print(f"Failed completely for {ticker_in}: {e}")
-                return['Not Found'] * 8 + ['Not Found'] * len(to_get_info)
+                logger.warning(f"Failed completely for {ticker_in} after {max_retries} attempts: {e}")
+                return ['Not Found'] * 8 + ['Not Found'] * len(to_get_info)
 
 # %% 4. MAIN PROCESSING LOOP
-to_get_info =['shortName', 'longBusinessSummary', 'lastDividendValue', 'currentPrice', 'targetHighPrice', 'targetLowPrice',
+to_get_info = ['shortName', 'longBusinessSummary', 'lastDividendValue', 'currentPrice', 'targetHighPrice', 'targetLowPrice',
                'targetMedianPrice', 'currency', 'numberOfAnalystOpinions', 'returnOnEquity', 'beta', 'quickRatio',
                'trailingPE', 'forwardPE', 'earningsQuarterlyGrowth', 'earningsGrowth']
 
-cols =['nc_income', 'interest_bearing_securities', 'interest_bearing_debt', 'int_income', 'total_income', 'market_cap', 'total_cash', 'total_debt']
+cols = ['nc_income', 'interest_bearing_securities', 'interest_bearing_debt', 'int_income', 'total_income', 'market_cap', 'total_cash', 'total_debt']
 
-data_list =[]
+data_list = []
 total_tickers = len(df)
-print(f"Starting to fetch API data for {total_tickers} valid tickers...")
+logger.info(f"Starting to fetch API data for {total_tickers} valid tickers...")
 
 for i, row in df.iterrows():
     data_list.append(fetch_ticker_robust(row['Symbol'], to_get_info))
     
     # Mild pause to play nice with Yahoo's limits
     if i % 200 == 0 and i > 0:
-        print(f"Processed {i}/{total_tickers} tickers...")
+        logger.info(f"Processed {i}/{total_tickers} tickers... Taking a 5-second breather.")
         time.sleep(5)
 
 df[cols + to_get_info] = data_list
+logger.info("Finished primary API fetching loop.")
 
 # %% 5. RETRY LOGIC FOR MISSING DATA
 df_not_found = df[df['longBusinessSummary'] == 'Not Found']
@@ -189,7 +209,7 @@ max_retry_rounds = 3
 rounds = 0
 
 while len(df_not_found) >= 5 and rounds < max_retry_rounds:
-    print(f"Missing {len(df_not_found)} tickers. Waiting 60 seconds before retry round {rounds + 1}/{max_retry_rounds}...")
+    logger.warning(f"Missing {len(df_not_found)} tickers. Waiting 60 seconds before retry round {rounds + 1}/{max_retry_rounds}...")
     time.sleep(60) 
     
     for i, row in df_not_found.iterrows():
@@ -204,9 +224,9 @@ df.rename(columns={'longBusinessSummary': 'Description'}, inplace=True)
 missing_count = len(df_not_found)
 
 if missing_count < 5:
-    print(f"SUCCESS: Only {missing_count} tickers missing due to API errors. Saving output to {OUTPUT_FILE}.")
+    logger.info(f"SUCCESS: Only {missing_count} tickers missing due to API errors. Saving output to {OUTPUT_FILE}.")
     df.to_csv(OUTPUT_FILE, index=False)
     sys.exit(0)
 else:
-    print(f"FAILURE: {missing_count} tickers still missing after retries. Threshold is < 5.")
+    logger.error(f"FAILURE: {missing_count} tickers still missing after all retries. Threshold is < 5.")
     sys.exit(1)
