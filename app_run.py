@@ -1,232 +1,310 @@
-import yfinance as yf
+import streamlit as st
 import pandas as pd
 import numpy as np
+import yfinance as yf
+from PIL import Image
 import datetime
-import time
-import requests
-import sys
-import logging
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 
-# %% LOGGING CONFIGURATION
-# Set up professional logging format
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s | %(levelname)-8s | %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S',
-    handlers=[
-        logging.StreamHandler(sys.stdout) # Ensures GitHub Actions captures the output properly
-    ]
-)
-logger = logging.getLogger(__name__)
+# --- CONFIGURATION ---
+# The URL to the static Release Asset we created in the GitHub Action
+GITHUB_RELEASE_URL = "https://github.com/shoebNTU/equity/releases/download/daily-data/latest_nasdaq.csv"
 
-# %% GLOBAL CONFIGURATION
-OUTPUT_FILE = 'latest_nasdaq.csv'
-CURR_STR = 'USD'
-EXCHANGE_CACHE = {}
-
-# Configure a robust requests session ONLY for the Nasdaq CSV download
-nasdaq_session = requests.Session()
-retry = Retry(
-    total=5,
-    backoff_factor=2, 
-    status_forcelist=[429, 500, 502, 503, 504]
-)
-adapter = HTTPAdapter(max_retries=retry)
-nasdaq_session.mount('http://', adapter)
-nasdaq_session.mount('https://', adapter)
-
-# %% 1. DYNAMICALLY DOWNLOAD NASDAQ SCREENER DATA
-logger.info("Connecting to NASDAQ API to download latest stock screener data...")
-headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
-    "Accept": "application/json, text/plain, */*"
-}
-nasdaq_url = "https://api.nasdaq.com/api/screener/stocks?tableonly=true&limit=25&offset=0&download=true"
-
-try:
-    response = nasdaq_session.get(nasdaq_url, headers=headers, timeout=15)
-    response.raise_for_status()
-    data = response.json()['data']['rows']
-    df = pd.DataFrame(data)
-    logger.info(f"Successfully downloaded {len(df)} initial rows from NASDAQ.")
-except Exception as e:
-    logger.error(f"Failed to download NASDAQ list: {e}")
-    sys.exit(1)
-
-# %% 2. CLEAN AND PREPARE DATA
-logger.info("Cleaning and formatting NASDAQ data...")
-df.rename(columns={'symbol': 'Symbol', 'marketCap': 'Market Cap', 'name': 'Name', 'industry': 'Industry'}, inplace=True)
-
-df['Market Cap'] = pd.to_numeric(df['Market Cap'].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
-df = df[df['Market Cap'] > 0]
-df = df[~df['Name'].str.contains(' Warrant', case=False, na=False)]
-
-df['Symbol'] = df['Symbol'].astype(str).str.replace('/', '-').str.strip()
-df.reset_index(drop=True, inplace=True)
-logger.info(f"Data cleaned. {len(df)} valid tickers remain to be processed.")
-
-# %% 3. HELPER FUNCTIONS
+# --- HELPER FUNCTIONS ---
+@st.cache_data(ttl=86400) # Cache exchange rates for a full 24 hours to speed up Halal checks
 def get_exchange_rate(base_currency, target_currency):
     if base_currency == target_currency:
         return 1.0
-        
     pair = f"{base_currency}{target_currency}=X"
-    if pair not in EXCHANGE_CACHE:
-        yesterday = datetime.date.today() - datetime.timedelta(days=5)
-        # Let yf handle the download naturally
-        data = yf.download(pair, start=yesterday, end=datetime.date.today(), progress=False)
-        if not data.empty:
-            EXCHANGE_CACHE[pair] = data.iloc[-1].iloc[0]
-            logger.info(f"Cached new exchange rate for {pair}: {EXCHANGE_CACHE[pair]:.4f}")
-        else:
-            logger.warning(f"Failed to get exchange rate for {pair}. Defaulting to 1.0")
-            EXCHANGE_CACHE[pair] = 1.0
-            
-    return EXCHANGE_CACHE[pair]
+    yesterday = datetime.date.today() - datetime.timedelta(days=5)
+    data = yf.download(pair, start=yesterday, end=datetime.date.today(), progress=False)
+    if not data.empty:
+        return data.iloc[-1].iloc[0]
+    return 1.0
 
+def is_valid_ticker(symbol):
+    try:
+        ticker = yf.Ticker(symbol)
+        info = ticker.info
+        return 'symbol' in info and info['symbol'].upper() == symbol.upper()
+    except Exception as e:
+        print(f"Error validating {symbol}: {e}")
+        return False
+
+@st.cache_data(ttl=3600) # Caches the downloaded CSV for 1 hour
+def load_data(file_path_or_url):
+    try:
+        data = pd.read_csv(file_path_or_url)
+        if 'nc_income' in data.columns:
+            data = data[data.nc_income != 'Not Found'].reset_index(drop=True)
+        return data
+    except Exception as e:
+        st.error(f"Error loading dataset: {e}")
+        return pd.DataFrame()
+
+# Synced optimizations from the daily scraper
 def get_data(ticker_in, to_get_info):
-    # Let yfinance use its native curl_cffi handling.
-    ticker = yf.Ticker(ticker_in)
-    info_ = ticker.info
-    
-    if not info_ or 'symbol' not in info_:
-        return ['Invalid'] * 8 + ['Invalid'] * len(to_get_info)
-            
-    mkt_cap_curr = info_.get('currency', CURR_STR)
-    debt_curr = info_.get('financialCurrency', CURR_STR)
+    try:
+        ticker = yf.Ticker(ticker_in)
+        info_ = ticker.info
 
-    qtr_st = ticker.quarterly_income_stmt
-    st = ticker.income_stmt
+        mkt_cap_curr = info_.get('currency', 'USD')
+        debt_curr = info_.get('financialCurrency', 'USD')
 
-    # Total Revenue
-    ret_total_income = 'Not Found'
-    total_income = 0.0
-    if not qtr_st.empty and 'Total Revenue' in qtr_st.index:
-        val = qtr_st.loc['Total Revenue'].iloc[:4].sum()
-        total_income = val if not np.isnan(val) else 0.0
-        ret_total_income = np.round(total_income, 2)
-    elif not st.empty and 'Total Revenue' in st.index:
-        val = st.loc['Total Revenue'].iloc[0]
-        total_income = val if not np.isnan(val) else 0.0
-        ret_total_income = np.round(total_income, 2)
-    
-    # Interest Income
-    ret_int_income = 'Not Found'
-    non_compliant_income = 0.0
-    if not qtr_st.empty and 'Interest Income' in qtr_st.index: 
-        val = qtr_st.loc['Interest Income'].iloc[:4].sum()
-        non_compliant_income = val if not np.isnan(val) else 0.0
-        ret_int_income = np.round(non_compliant_income, 2)
-    elif not st.empty and 'Interest Income' in st.index:
-        val = st.loc['Interest Income'].iloc[0]
-        non_compliant_income = val if not np.isnan(val) else 0.0
-        ret_int_income = np.round(non_compliant_income, 2)
+        qtr_st = ticker.quarterly_income_stmt
+        st_ = ticker.income_stmt
 
-    # Total Cash
-    qtr_bs = ticker.quarterly_balance_sheet
-    ret_total_cash = 'Not Found'
-    total_cash = 0.0
-    if not qtr_bs.empty and 'Cash And Cash Equivalents' in qtr_bs.index:
-        val = qtr_bs.loc['Cash And Cash Equivalents'].iloc[0]
-        total_cash = val if not np.isnan(val) else 0.0
-        ret_total_cash = np.round(total_cash, 2)
+        # Total Revenue
+        total_income = 0.0
+        ret_total_income = 'Not Found'
+        if not qtr_st.empty and 'Total Revenue' in qtr_st.index:
+            val = qtr_st.loc['Total Revenue'].iloc[:4].sum()
+            if not np.isnan(val):
+                total_income = val
+                ret_total_income = np.round(total_income, 2)
+        elif not st_.empty and 'Total Revenue' in st_.index:
+            val = st_.loc['Total Revenue'].iloc[0]
+            if not np.isnan(val):
+                total_income = val
+                ret_total_income = np.round(total_income, 2)
+
+        # Interest Income
+        non_compliant_income = 0.0
+        ret_int_income = 'Not Found'
+        if not qtr_st.empty and 'Interest Income' in qtr_st.index: 
+            val = qtr_st.loc['Interest Income'].iloc[:4].sum()
+            if not np.isnan(val):
+                non_compliant_income = val
+                ret_int_income = np.round(non_compliant_income, 2)
+        elif not st_.empty and 'Interest Income' in st_.index:
+            val = st_.loc['Interest Income'].iloc[0]
+            if not np.isnan(val):
+                non_compliant_income = val
+                ret_int_income = np.round(non_compliant_income, 2)
+
+        # Cash
+        qtr_bs = ticker.quarterly_balance_sheet
+        total_cash = 0.0
+        ret_total_cash = 'Not Found'
+        if not qtr_bs.empty and 'Cash And Cash Equivalents' in qtr_bs.index:
+            val = qtr_bs.loc['Cash And Cash Equivalents'].iloc[0]
+            if not np.isnan(val):
+                total_cash = val
+                ret_total_cash = np.round(total_cash, 2)
         
-    # Debt & Market Cap
-    total_debt = info_.get('totalDebt', 0.0) 
-    total_debt = total_debt if total_debt is not None and not np.isnan(total_debt) else 0.0
+        # Debt & Market Cap
+        total_debt = info_.get('totalDebt', 0.0)
+        total_debt = total_debt if total_debt is not None and not np.isnan(total_debt) else 0.0
+        
+        market_cap_raw = info_.get('marketCap', 0.0)
+        market_cap_raw = market_cap_raw if market_cap_raw is not None and not np.isnan(market_cap_raw) else 0.0
+
+        if mkt_cap_curr != debt_curr and market_cap_raw > 0:
+            market_cap = market_cap_raw * get_exchange_rate(mkt_cap_curr, debt_curr)
+        else:
+            market_cap = market_cap_raw
+
+        ret_total_debt = np.round(total_debt, 2) if total_debt > 0 else 'Not Found'
+        ret_market_cap = np.round(market_cap, 2) if market_cap > 0 else 'Not Found'
+
+        if total_income > 0:
+            non_compliant_ratio = non_compliant_income / total_income
+        elif non_compliant_income > 0:
+            non_compliant_ratio = 1.0 
+        else:
+            non_compliant_ratio = 0.0
+
+        info = [info_.get(i) for i in to_get_info]
+
+        if market_cap > 0:
+            return[np.round(100 * non_compliant_ratio, 2), np.round(100 * total_cash / market_cap, 2), np.round(100 * total_debt / market_cap, 2),
+                    ret_int_income, ret_total_income, ret_market_cap, ret_total_cash, ret_total_debt, info]
+        else:
+            return[100 * non_compliant_ratio, 0.0, 0.0, 
+                    ret_int_income, ret_total_income, ret_market_cap, ret_total_cash, ret_total_debt, info]
+                    
+    except Exception as e:
+        print(f'Not found {ticker_in}: {e}')
+        return ['Not Found'] * 9 
+
+# --- UI LOGIC START ---
+st.set_page_config(layout="wide")
+st.title('Timepass')
+
+st.sidebar.title('Search Parameters')
+
+df_raw = load_data(GITHUB_RELEASE_URL)
+
+if df_raw.empty:
+    st.error("No data available. Please wait for the daily GitHub Action to generate the file.")
+    st.stop()
+
+# Explicit copy to prevent mutating Streamlit's cached state
+df = df_raw.copy()
+
+name = st.sidebar.text_input('Please enter `Name` of the company (optional)', value='').lower().strip()
+symbol = st.sidebar.text_input('Please enter `Ticker` of the company (optional)', value='').lower().strip()
+
+halal_check = st.sidebar.selectbox(label='Do you want to filter out non-Halal stocks?', options=['Yes','No'], index=1)
+
+no_of_search = st.sidebar.number_input(label='Please enter `number` of `keywords` to be searched (optional)', value=0, min_value=0)
+search_text =[]
+if no_of_search:
+    for i in range(no_of_search):
+        search_text.append(st.sidebar.text_input(label="Please enter `keyword` to be searched in company's description", value='', key=i).lower().strip())
+
+beta_value_filter = st.sidebar.number_input(label='Please enter `Beta` value to filter', value=0.0)
+quick_ratio_filter = st.sidebar.number_input(label='Please enter `Quick Ratio` value to filter', value=1.0)
+
+low_price = st.sidebar.selectbox(label="Current Price < Analyst's Low Price?", options=['Yes','No'], index=1)
+
+if low_price == 'Yes':
+    no_analyst = st.sidebar.number_input(label="Please enter no. of analyst's opinions", value=0, min_value=0)
+
+st.sidebar.markdown('---')
+submit = st.sidebar.button('Submit')
+
+with st.expander('Halal calculation'):
+    st.info("""
+    - non_compliant_income = (Interest-Income/Total-Revenue) --> `<5%`
+    - Interest-bearing securities = (Cash + Cash Equivalents + Deposits) / Market Cap --> `<30%`
+    - Interest-bearing debt = Total debt / Market Cap --> `<30%`
+    """)
+
+if submit:
+    # Filter Dataframe securely
+    if symbol:
+        df = df[df['Symbol'].astype(str).str.contains(symbol, case=False, na=False)]
     
-    market_cap_raw = info_.get('marketCap', 0.0)
-    market_cap_raw = market_cap_raw if market_cap_raw is not None and not np.isnan(market_cap_raw) else 0.0
+    df['Industry'] = df.get('Industry', pd.Series(dtype=str)).fillna('None')
 
-    if mkt_cap_curr != debt_curr and market_cap_raw > 0:
-        market_cap = market_cap_raw * get_exchange_rate(mkt_cap_curr, debt_curr)
-    else:
-        market_cap = market_cap_raw
+    if len(df) and name:
+        df = df[df['Name'].astype(str).str.contains(name, case=False, na=False)]
 
-    ret_total_debt = np.round(total_debt, 2) if total_debt > 0 else 'Not Found'
-    ret_market_cap = np.round(market_cap, 2) if market_cap > 0 else 'Not Found'
+    # Filter based on beta and quick ratio (safely coercing string values to numeric)
+    df['beta_num'] = pd.to_numeric(df.get('beta'), errors='coerce')
+    df['quickRatio_num'] = pd.to_numeric(df.get('quickRatio'), errors='coerce')
+    
+    df = df[(df.beta_num <= beta_value_filter) | (df.beta_num.isna())]
+    df = df[(df.quickRatio_num >= quick_ratio_filter) | (df.quickRatio_num.isna())]
 
-    if total_income > 0:
-        non_compliant_ratio = non_compliant_income / total_income
-    elif non_compliant_income > 0:
-        non_compliant_ratio = 1.0 
-    else:
-        non_compliant_ratio = 0.0
+    # Filter industry
+    df = df[~df['Industry'].str.contains('bio', case=False, na=False)]
 
-    info_list = [info_.get(i) for i in to_get_info]
+    if no_of_search:
+        # Replaced unsafe eval() with secure string filtering loop
+        for text in search_text:
+            if text:
+                df = df[df['Description'].astype(str).str.contains(text, case=False, na=False)]
                 
-    if market_cap > 0:
-        return [np.round(100*non_compliant_ratio, 2), np.round(100*total_cash/market_cap, 2), np.round(100*total_debt/market_cap, 2),
-                ret_int_income, ret_total_income, ret_market_cap, ret_total_cash, ret_total_debt] + info_list
-    else:
-        return [np.round(100*non_compliant_ratio, 2), 0.0, 0.0, 
-                ret_int_income, ret_total_income, ret_market_cap, ret_total_cash, ret_total_debt] + info_list
-
-def fetch_ticker_robust(ticker_in, to_get_info, max_retries=3):
-    for attempt in range(max_retries):
-        try:
-            return get_data(ticker_in, to_get_info)
-        except Exception as e:
-            if "404" in str(e) or "No data found" in str(e):
-                return ['Invalid'] * 8 + ['Invalid'] * len(to_get_info)
-            
-            if attempt < max_retries - 1:
-                sleep_time = 2 ** (attempt + 1)
-                logger.debug(f"Transient error for {ticker_in}: {e}. Retrying in {sleep_time}s...")
-                time.sleep(sleep_time) 
-            else:
-                logger.warning(f"Failed completely for {ticker_in} after {max_retries} attempts: {e}")
-                return ['Not Found'] * 8 + ['Not Found'] * len(to_get_info)
-
-# %% 4. MAIN PROCESSING LOOP
-to_get_info = ['shortName', 'longBusinessSummary', 'lastDividendValue', 'currentPrice', 'targetHighPrice', 'targetLowPrice',
-               'targetMedianPrice', 'currency', 'numberOfAnalystOpinions', 'returnOnEquity', 'beta', 'quickRatio',
-               'trailingPE', 'forwardPE', 'earningsQuarterlyGrowth', 'earningsGrowth']
-
-cols = ['nc_income', 'interest_bearing_securities', 'interest_bearing_debt', 'int_income', 'total_income', 'market_cap', 'total_cash', 'total_debt']
-
-data_list = []
-total_tickers = len(df)
-logger.info(f"Starting to fetch API data for {total_tickers} valid tickers...")
-
-for i, row in df.iterrows():
-    data_list.append(fetch_ticker_robust(row['Symbol'], to_get_info))
-    
-    # Mild pause to play nice with Yahoo's limits
-    if i % 200 == 0 and i > 0:
-        logger.info(f"Processed {i}/{total_tickers} tickers... Taking a 5-second breather.")
-        time.sleep(5)
-
-df[cols + to_get_info] = data_list
-logger.info("Finished primary API fetching loop.")
-
-# %% 5. RETRY LOGIC FOR MISSING DATA
-df_not_found = df[df['longBusinessSummary'] == 'Not Found']
-
-max_retry_rounds = 3
-rounds = 0
-
-while len(df_not_found) >= 5 and rounds < max_retry_rounds:
-    logger.warning(f"Missing {len(df_not_found)} tickers. Waiting 60 seconds before retry round {rounds + 1}/{max_retry_rounds}...")
-    time.sleep(60) 
-    
-    for i, row in df_not_found.iterrows():
-        df.loc[i, cols + to_get_info] = fetch_ticker_robust(row['Symbol'], to_get_info, max_retries=2)
+    if halal_check == 'Yes':
+        # Safely casts strings like 'Not Found' to NaN before comparing to prevent float crash
+        df = df[(pd.to_numeric(df['nc_income'], errors='coerce') < 5) & \
+                (pd.to_numeric(df['interest_bearing_securities'], errors='coerce') < 30) & \
+                (pd.to_numeric(df['interest_bearing_debt'], errors='coerce') < 30)]
         
-    df_not_found = df[df['longBusinessSummary'] == 'Not Found']
-    rounds += 1
+    if low_price == 'Yes':
+        df = df[df['currentPrice'].notna() & df['targetLowPrice'].notna() & df['numberOfAnalystOpinions'].notna()].reset_index(drop=True)
+        df = df[pd.to_numeric(df['numberOfAnalystOpinions'], errors='coerce') >= no_analyst]
+        df = df[(pd.to_numeric(df['currentPrice'], errors='coerce') < pd.to_numeric(df['targetLowPrice'], errors='coerce'))]
+        
+        df['percent_diff'] = (pd.to_numeric(df['targetLowPrice'], errors='coerce') - pd.to_numeric(df['currentPrice'], errors='coerce')) / pd.to_numeric(df['currentPrice'], errors='coerce')
+        df.sort_values(by=['percent_diff', 'numberOfAnalystOpinions'], ascending=False, inplace=True)
 
-# %% 6. FINAL CLEANUP AND CONDITIONAL SAVE
-df.rename(columns={'longBusinessSummary': 'Description'}, inplace=True)
+    columns_to_show =['Symbol','Name','Industry', 'market_cap', 'currentPrice', 'targetLowPrice', 'targetHighPrice', 'targetMedianPrice','numberOfAnalystOpinions','returnOnEquity',
+                       'nc_income', 'interest_bearing_securities', 'interest_bearing_debt', 'beta', 'quickRatio', 'Description', 'forwardPE', 'trailingPE', 'earningsQuarterlyGrowth', 'earningsGrowth']
+    
+    # Ensure columns exist before filtering to avoid UI crash
+    columns_to_show =[col for col in columns_to_show if col in df.columns]
+    df = df[columns_to_show]
+    
+    df.reset_index(drop=True, inplace=True)
+    st.success(f'Total number of rows found - {len(df)}')
+    st.dataframe(df, use_container_width=True)
 
-missing_count = len(df_not_found)
+with st.expander('Exchange Rate (overriden)'):
+    c_exchange_rate,_ = st.columns([1,3])
+    with c_exchange_rate:
+        default_exchange_rate = st.number_input('Please enter exchange rate for currency conversion', value=1.0)
 
-if missing_count < 5:
-    logger.info(f"SUCCESS: Only {missing_count} tickers missing due to API errors. Saving output to {OUTPUT_FILE}.")
-    df.to_csv(OUTPUT_FILE, index=False)
-    sys.exit(0)
-else:
-    logger.error(f"FAILURE: {missing_count} tickers still missing after all retries. Threshold is < 5.")
-    sys.exit(1)
+with st.expander('Ticker Query for Halal Check'):
+    st.info('Please enter ticker symbol to check for `HALAL` status')
+    ticker_input = st.text_input(label='Please enter symbol. Refer https://finance.yahoo.com for correct ticker symbol.', value='').upper().strip()
+    
+    if ticker_input:
+        get_status = st.button('Check')
+        if get_status:
+            if is_valid_ticker(ticker_input):
+                to_get_info =['shortName', 'longBusinessSummary', 'beta','currentPrice','targetHighPrice','targetLowPrice', 
+                               'currency','numberOfAnalystOpinions','returnOnEquity',
+                               'fiftyTwoWeekLow','fiftyTwoWeekHigh']
+                
+                nc_income, interest_bearing_securities, interest_bearing_debt, \
+                int_income, total_income, market_cap, total_cash, total_debt, info = get_data(ticker_input, to_get_info)
+                
+                df_ticker = pd.DataFrame({'nc_income':[nc_income], 'interest_bearing_securities':[interest_bearing_securities], 
+                                    'interest_bearing_debt':[interest_bearing_debt],
+                                    'int_income':int_income, 'total_income':total_income, 'market_cap':market_cap, 'Cash':total_cash, 'Debt':total_debt})
+                
+                c_title,_ = st.columns([1,2])
+                with c_title:
+                    st.info(f'###### {info[0]}')
+                    st.dataframe(df_ticker, use_container_width=True)
+                    
+                c1,_ = st.columns([1,4])
+                to_show =[]
+                for i, j in enumerate(info[1:]):
+                    to_show.append(f'**{to_get_info[i+1]}**: {j}')
+
+                ticker = yf.Ticker(ticker_input)
+                try:
+                    earnings_dates = ticker.earnings_dates
+                except Exception:
+                    earnings_dates = None
+
+                if earnings_dates is not None:
+                    current_date = datetime.datetime.now(earnings_dates.index[0].tz)
+                    next_earnings = earnings_dates[earnings_dates.index > current_date].sort_index()
+                    if not next_earnings.empty:
+                        to_show.append(f'**nextEarningDate**: {next_earnings.index[0]}')
+                
+                with c1:
+                    maybe = 0
+                    if df_ticker.iloc[:,3:].apply(lambda x: x.astype(str).str.contains('Not Found').any(), axis=1).values[0]:
+                        st.warning('Maybe HALAL. Please check.')
+                        maybe = 1
+                    elif (isinstance(nc_income, (int, float)) and nc_income >= 5) or \
+                         (isinstance(interest_bearing_securities, (int, float)) and interest_bearing_securities >= 30) or \
+                         (isinstance(interest_bearing_debt, (int, float)) and interest_bearing_debt >= 30):
+                        st.error('Non-HALAL')
+                    else:
+                        st.success('HALAL')
+                        
+                    if maybe:
+                        st.write('No calculation violations to rule out `Halal` status. However, one or more calculation related values were `Not Found`.')
+                
+                st.info(' \n'.join(to_show))
+                st.markdown('---')
+                st.info('#### News Articles')
+                
+                # --- THIS IS THE RESTORED/FIXED PORTION ---
+                try:
+                    news_articles = ticker.news
+                    if news_articles:
+                        for article in news_articles:
+                            title = article.get('title', 'No Title')
+                            link = article.get('link', '#')
+                            pub_time = article.get('providerPublishTime')
+                            
+                            if pub_time:
+                                date_str = datetime.datetime.fromtimestamp(pub_time).strftime('%Y-%m-%d %H:%M:%S')
+                            else:
+                                date_str = "Unknown Date"
+                                
+                            st.markdown(f"**{date_str}** - [{title}]({link})")
+                    else:
+                        st.write("No news articles found for this ticker.")
+                except Exception as e:
+                    st.write(f"Could not fetch news articles. ({e})")
+            else:
+                st.error("Invalid Ticker Symbol. Please check and try again.")
+    st.image(Image.open('yfinance.png'), width=750)
