@@ -264,9 +264,6 @@ if submit:
     if enable_quick_ratio and quick_ratio_filter is not None:
         df = df[(df.quickRatio_num >= quick_ratio_filter) | (df.quickRatio_num.isna())]
 
-    # Filter industry (exclude non-compliant sectors)
-    df = df[~df['Industry'].str.contains('bio', case=False, na=False)]
-
     if enable_keywords and keywords_input:
         for kw in [k.strip() for k in keywords_input.split(',') if k.strip()]:
             df = df[df['Description'].astype(str).str.contains(kw, case=False, na=False)]
