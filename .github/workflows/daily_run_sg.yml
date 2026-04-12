@@ -1,4 +1,4 @@
-name: Daily Stock Data Scraper
+name: Daily SG Stock Data Scraper
 
 on:
   schedule:
