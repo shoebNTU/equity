@@ -5,10 +5,7 @@ import datetime
 import time
 import requests
 import sys
-import io
 import logging
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 
 # %% LOGGING CONFIGURATION
 # Set up professional logging format
@@ -27,97 +24,34 @@ OUTPUT_FILE = 'latest_sgx.csv'
 CURR_STR = 'SGD'
 EXCHANGE_CACHE = {}
 
-# Configure a robust requests session ONLY for the SGX screener download
-sgx_session = requests.Session()
-sgx_session.verify = False  # Disable SSL verification for SGX API
-retry = Retry(
-    total=5,
-    backoff_factor=2, 
-    status_forcelist=[403, 429, 500, 502, 503, 504]
-)
-adapter = HTTPAdapter(max_retries=retry)
-sgx_session.mount('http://', adapter)
-sgx_session.mount('https://', adapter)
+# %% 1. DOWNLOAD SGX TICKERS DIRECTLY FROM SGX WEBSITE
 
-# %% 1. DYNAMICALLY DOWNLOAD SGX SCREENER DATA
-logger.info("Connecting to SGX API to download latest stock screener data...")
-headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Referer": "https://investors.sgx.com/",
-    "Origin": "https://investors.sgx.com",
-    "Accept": "application/json, text/plain, */*"
-}
-sgx_url = "https://api.sgx.com/stockscreener/v2.0/all"
+def scrape_sgx_tickers():
+    logger.info("Fetching SGX tickers from SGX official API...")
+    url = "https://api.sgx.com/securities/v1.1"
+    resp = requests.get(url, headers={"Accept": "application/json"}, timeout=15, verify=False)
+    resp.raise_for_status()
+    prices = resp.json()['data']['prices']
+    stocks = [p for p in prices if p.get('type') == 'stocks' and p.get('nc')]
+    df = pd.DataFrame([{'Symbol': s['nc'], 'Name': s.get('n', ''), 'Market Cap': 1.0} for s in stocks])
+    logger.info(f"Loaded {len(df)} stock tickers from SGX official API.")
+    return df
 
 try:
-    response = sgx_session.get(sgx_url, headers=headers, timeout=15)
-    response.raise_for_status()
-    data = response.json().get('data',[])
-    if not data:
-        raise ValueError("Empty data list returned from SGX API.")
-    df = pd.DataFrame(data)
-    logger.info(f"Successfully downloaded {len(df)} initial rows from SGX.")
+    df = scrape_sgx_tickers()
 except Exception as e:
-    logger.warning(f"Failed to download SGX list from API: {e}. Attempting reliable Wikipedia fallback...")
-    try:
-        # Robust Fallback to STI Constituents (Fixes Wikipedia 403 block on urllib)
-        wiki_url = "https://en.wikipedia.org/wiki/Straits_Times_Index"
-        
-        # We explicitly use requests with a standard browser User-Agent to fetch the HTML
-        wiki_response = sgx_session.get(wiki_url, headers=headers, timeout=15)
-        wiki_response.raise_for_status()
-        
-        # Parse the raw HTML text using io.StringIO to satisfy Pandas
-        tables = pd.read_html(io.StringIO(wiki_response.text))
-        
-        df = None
-        for table in tables:
-            cols_lower = [str(c).lower() for c in table.columns]
-            if 'stock symbol' in cols_lower or 'ticker' in cols_lower:
-                df = table.copy()
-                break
-        
-        if df is None:
-            raise ValueError("Could not find table with tickers in Wikipedia fallback.")
-        logger.info(f"Successfully loaded {len(df)} STI constituents from Wikipedia fallback.")
-    except Exception as e_fallback:
-        logger.error(f"Fallback also failed: {e_fallback}. Exiting.")
-        sys.exit(1)
+    logger.error(f"SGX website scraping failed: {e}. Exiting.")
+    sys.exit(1)
+
 
 # %% 2. CLEAN AND PREPARE DATA
 logger.info("Cleaning and formatting SGX data...")
 
-# Map various possible column names from SGX JSON or Fallback to standard names
-column_mapping = {
-    'stockcode': 'Symbol',
-    'ticker': 'Symbol',
-    'symbol': 'Symbol',
-    'stock symbol': 'Symbol',
-    'companyname': 'Name',
-    'name': 'Name',
-    'company': 'Name',
-    'marketcap': 'Market Cap',
-    'industry': 'Industry',
-    'sector': 'Industry'
-}
-df.rename(columns=lambda c: column_mapping.get(str(c).lower().strip(), c), inplace=True)
-
-if 'Symbol' not in df.columns:
-    logger.error(f"Could not locate 'Symbol' column in the response. Columns found: {df.columns.tolist()}")
-    sys.exit(1)
-
-# Provide a default Market Cap dummy if the endpoint obscured/skipped it to pass the filter
-if 'Market Cap' not in df.columns:
-    df['Market Cap'] = 1.0
-
-df['Market Cap'] = pd.to_numeric(df['Market Cap'].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
-df = df[df['Market Cap'] > 0]
-
-if 'Name' in df.columns:
-    df = df[~df['Name'].str.contains(' Warrant', case=False, na=False)]
+df['Name'] = df['Name'].astype(str)
+df = df[~df['Name'].str.contains(' Warrant', case=False, na=False)]
 
 # Singapore stocks in Yahoo Finance require the '.SI' suffix (e.g. D05 -> D05.SI)
-df['Symbol'] = df['Symbol'].astype(str).str.replace('/', '-').str.replace('SGX:', '', case=False).str.strip()
+df['Symbol'] = df['Symbol'].astype(str).str.replace('/', '-').str.strip()
 df['Symbol'] = df['Symbol'].apply(lambda x: x if x.endswith('.SI') else f"{x}.SI")
 
 df.reset_index(drop=True, inplace=True)
