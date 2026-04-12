@@ -63,8 +63,16 @@ def get_data_update_time():
             headers={"Accept": "application/vnd.github.v3+json"}
         )
         if response.status_code == 200:
+            assets = response.json().get('assets', [])
+            for asset in assets:
+                if asset.get('name') == 'latest_nasdaq.csv':
+                    updated_at = asset.get('updated_at')
+                    if updated_at:
+                        return datetime.datetime.fromisoformat(updated_at.replace('Z', '+00:00'))
+            # fallback to published_at if asset not found
             published_at = response.json().get('published_at')
-            return datetime.datetime.fromisoformat(published_at.replace('Z', '+00:00'))
+            if published_at:
+                return datetime.datetime.fromisoformat(published_at.replace('Z', '+00:00'))
     except Exception as e:
         print(f"Could not fetch release time: {e}")
     return None
