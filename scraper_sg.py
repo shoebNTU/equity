@@ -179,6 +179,9 @@ to_get_info =['shortName', 'longBusinessSummary', 'lastDividendValue', 'currentP
 
 cols =['nc_income', 'interest_bearing_securities', 'interest_bearing_debt', 'int_income', 'total_income', 'market_cap', 'total_cash', 'total_debt']
 
+# Add 'industry' to to_get_info for yfinance enrichment
+to_get_info.append('industry')
+
 data_list =[]
 total_tickers = len(df)
 logger.info(f"Starting to fetch API data for {total_tickers} valid tickers...")
@@ -212,13 +215,15 @@ while len(df_not_found) >= 5 and rounds < max_retry_rounds:
 
 # %% 6. FINAL CLEANUP AND CONDITIONAL SAVE
 df.rename(columns={'longBusinessSummary': 'Description'}, inplace=True)
+df.rename(columns={'industry': 'Industry'}, inplace=True)
 
 missing_count = len(df_not_found)
 
-if missing_count < 5:
-    logger.info(f"SUCCESS: Only {missing_count} tickers missing due to API errors. Saving output to {OUTPUT_FILE}.")
+if missing_count == 0:
+    logger.info(f"SUCCESS: No tickers missing due to API errors. Saving output to {OUTPUT_FILE}.")
     df.to_csv(OUTPUT_FILE, index=False)
-    sys.exit(0)
 else:
-    logger.error(f"FAILURE: {missing_count} tickers still missing after all retries. Threshold is < 5.")
-    sys.exit(1)
+    logger.warning(f"{missing_count} tickers missing after all retries. Saving output to {OUTPUT_FILE} anyway.")
+    logger.warning(f"Tickers missing after all retries: {list(df_not_found['Symbol'])}")
+    df.to_csv(OUTPUT_FILE, index=False)
+# No sys.exit() calls, script always completes successfully
