@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 # Suppress the insecure request warnings so it doesn't spam your console
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-OUTPUT_FILE = 'latest_india_all.csv'
+OUTPUT_FILE = 'latest_india.csv'
 
 # Robust requests session for downloading the ticker lists
 session = requests.Session()
