@@ -287,7 +287,7 @@ while len(df_not_found) >= 5 and rounds < max_retry_rounds:
     logger.warning(f"Missing {len(df_not_found)} tickers. Waiting 60 seconds before retry round {rounds + 1}/{max_retry_rounds}...")
     time.sleep(60)
     for i, row in df_not_found.iterrows():
-        df.loc[i, to_get_info] = fetch_ticker_robust(row['Symbol'], to_get_info, max_retries=2)
+        df.loc[i, cols + to_get_info] = fetch_ticker_robust(row['Symbol'], to_get_info, max_retries=2)
     df_not_found = df[df.apply(is_all_not_found, axis=1)]
     rounds += 1
 
