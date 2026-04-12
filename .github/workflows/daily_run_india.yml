@@ -34,3 +34,11 @@ jobs:
         files: latest_india_all.csv
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view daily-data > /dev/null 2>&1; then
+            echo "Release exists. Overwriting the asset..."
+            gh release upload daily-data latest_nasdaq.csv --clobber
+          else
+            echo "Release does not exist. Creating it now..."
+            gh release create daily-data latest_nasdaq.csv --title "Daily Nasdaq Data" --notes "Automated daily CSV update."
+          fi
