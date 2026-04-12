@@ -1,44 +1,44 @@
-name: Daily Run India
+name: Daily India Stock Data Scraper
 
 on:
   schedule:
-    - cron: '0 2 * * *'  # Runs every day at 2 AM UTC
+    - cron: '0 2 * * *' # Runs daily at 2 AM UTC
+  workflow_dispatch: # Allows manual triggers
+
+# Grants permission to create/overwrite GitHub Releases
+permissions:
+  contents: write
 
 jobs:
-  run_scraper:
+  run-scraper:
     runs-on: ubuntu-latest
-
+    
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v2
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v2
-      with:
-        python-version: '3.10'
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
 
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # urllib3 is used for the exponential backoff retries
+          pip install yfinance pandas numpy requests urllib3 curl_cffi
 
-    - name: Run scraper
-      run: |
-        python scraper_india.py
+      - name: Run Python script
+        run: python scraper_india.py
 
-    - name: Upload to Release
-      uses: softprops/action-gh-release@v1
-      with:
-        tag: daily-data-india
-        name: Daily India Stock Data
-        files: latest_india_all.csv
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload to GitHub Releases
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if gh release view daily-data > /dev/null 2>&1; then
             echo "Release exists. Overwriting the asset..."
-            gh release upload daily-data latest_nasdaq.csv --clobber
+            gh release upload daily-data latest_india.csv --clobber
           else
             echo "Release does not exist. Creating it now..."
-            gh release create daily-data latest_nasdaq.csv --title "Daily Nasdaq Data" --notes "Automated daily CSV update."
+            gh release create daily-data latest_india.csv --title "Daily India Data" --notes "Automated daily CSV update."
           fi
