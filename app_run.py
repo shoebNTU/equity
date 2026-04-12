@@ -175,7 +175,7 @@ st.sidebar.info('Tip: Hover over the ⓘ icons for explanations of each filter.'
 
 data_update_time = get_data_update_time()
 if data_update_time:
-    st.sidebar.info(f"📅 Data last updated: {data_update_time.strftime('%Y-%m-%d %H:%M:%S UTC')}")
+    st.sidebar.info(f"📅 Data last updated:  \n {data_update_time.strftime('%Y-%m-%d %H:%M:%S UTC')}")
 else:
     st.sidebar.info("📅 Data update time unavailable")
 
@@ -249,13 +249,25 @@ if enable_quick_ratio:
 else:
     quick_ratio_filter = None
 
+
 st.sidebar.markdown('### Analyst Price Target')
-low_price = st.sidebar.checkbox(
-    "Current price below analyst's low target",
+analyst_price_filter = st.sidebar.checkbox(
+    "Current price below analyst target",
     value=False,
-    help='Find stocks trading below the lowest analyst price target — a potential value signal.'
+    help='Find stocks trading below the selected analyst price target — a potential value signal.'
 )
-if low_price:
+if analyst_price_filter:
+    analyst_target_type = st.sidebar.selectbox(
+        "Select analyst target type",
+        options=[
+            ("Low", "targetLowPrice"),
+            ("Median", "targetMedianPrice"),
+            ("High", "targetHighPrice")
+        ],
+        format_func=lambda x: x[0],
+        index=0,
+        help="Choose which analyst target to compare against."
+    )[1]
     no_analyst = st.sidebar.number_input(
         label="Min number of analyst opinions",
         value=1,
@@ -302,13 +314,14 @@ if submit:
                 (pd.to_numeric(df['interest_bearing_securities'], errors='coerce') < 30) & \
                 (pd.to_numeric(df['interest_bearing_debt'], errors='coerce') < 30)]
         
-    if low_price:
-        df = df[df['currentPrice'].notna() & df['targetLowPrice'].notna() & df['numberOfAnalystOpinions'].notna()].reset_index(drop=True)
-        df = df[pd.to_numeric(df['numberOfAnalystOpinions'], errors='coerce') >= no_analyst]
-        df = df[(pd.to_numeric(df['currentPrice'], errors='coerce') < pd.to_numeric(df['targetLowPrice'], errors='coerce'))]
-        
-        df['percent_diff'] = (pd.to_numeric(df['targetLowPrice'], errors='coerce') - pd.to_numeric(df['currentPrice'], errors='coerce')) / pd.to_numeric(df['currentPrice'], errors='coerce')
-        df.sort_values(by=['percent_diff', 'numberOfAnalystOpinions'], ascending=False, inplace=True)
+    if analyst_price_filter:
+        # Ensure the selected target column exists
+        if analyst_target_type in df.columns:
+            df = df[df['currentPrice'].notna() & df[analyst_target_type].notna() & df['numberOfAnalystOpinions'].notna()].reset_index(drop=True)
+            df = df[pd.to_numeric(df['numberOfAnalystOpinions'], errors='coerce') >= no_analyst]
+            df = df[(pd.to_numeric(df['currentPrice'], errors='coerce') < pd.to_numeric(df[analyst_target_type], errors='coerce'))]
+            df['percent_diff'] = (pd.to_numeric(df[analyst_target_type], errors='coerce') - pd.to_numeric(df['currentPrice'], errors='coerce')) / pd.to_numeric(df['currentPrice'], errors='coerce')
+            df.sort_values(by=['percent_diff', 'numberOfAnalystOpinions'], ascending=False, inplace=True)
 
     columns_to_show =['Symbol','Name','Industry', 'market_cap', 'currentPrice', 'targetLowPrice', 'targetHighPrice', 'targetMedianPrice','numberOfAnalystOpinions','returnOnEquity',
                        'nc_income', 'interest_bearing_securities', 'interest_bearing_debt', 'beta', 'quickRatio', 'Description', 'forwardPE', 'trailingPE', 'earningsQuarterlyGrowth', 'earningsGrowth']
