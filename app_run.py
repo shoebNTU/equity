@@ -76,8 +76,15 @@ def load_data(file_path_or_url):
         return pd.DataFrame()
     
 @st.cache_data(ttl=3600)
-def get_data_update_time():
+def get_data_update_time(selected_country):
     try:
+        # Map selected_country to the correct CSV filename
+        csv_map = {
+            "India": "latest_india.csv",
+            "USA": "latest_nasdaq.csv",
+            "SG": "latest_sgx.csv"
+        }
+        csv_name = csv_map.get(selected_country, "latest_nasdaq.csv")
         response = requests.get(
             "https://api.github.com/repos/shoebNTU/equity/releases/tags/daily-data",
             headers={"Accept": "application/vnd.github.v3+json"}
@@ -85,7 +92,7 @@ def get_data_update_time():
         if response.status_code == 200:
             assets = response.json().get('assets', [])
             for asset in assets:
-                if asset.get('name') == 'latest_nasdaq.csv':
+                if asset.get('name') == csv_name:
                     updated_at = asset.get('updated_at')
                     if updated_at:
                         return datetime.datetime.fromisoformat(updated_at.replace('Z', '+00:00'))
@@ -194,7 +201,7 @@ st.sidebar.title('Screening Filters')
 
 st.sidebar.info('Tip: Hover over the ⓘ icons for explanations of each filter.')
 
-data_update_time = get_data_update_time()
+data_update_time = get_data_update_time(selected_country)
 if data_update_time:
     st.sidebar.info(f"📅 Data last updated:  \n {data_update_time.strftime('%Y-%m-%d %H:%M:%S UTC')}")
 else:
