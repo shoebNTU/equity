@@ -19,9 +19,25 @@ with st.expander("⚠️ Disclaimer", expanded=False):
         """
     )
 
+
 # --- CONFIGURATION ---
-# The URL to the static Release Asset we created in the GitHub Action
-GITHUB_RELEASE_URL = "https://github.com/shoebNTU/equity/releases/download/daily-data/latest_nasdaq.csv"
+# Map countries to their GitHub CSV URLs
+COUNTRY_URLS = {
+    "India": "https://github.com/shoebNTU/equity/releases/download/daily-data/latest_india.csv",
+    "USA": "https://github.com/shoebNTU/equity/releases/download/daily-data/latest_nasdaq.csv",
+    "SG": "https://github.com/shoebNTU/equity/releases/download/daily-data/latest_sgx.csv",
+    # Add more countries and URLs as needed
+}
+
+# --- SIDEBAR COUNTRY FILTER ---
+st.sidebar.markdown('### Country')
+selected_country = st.sidebar.selectbox(
+    'Select Country',
+    options=list(COUNTRY_URLS.keys()),
+    index=1 if "USA" in COUNTRY_URLS else 0,
+    help='Choose the country/market to screen stocks from.'
+)
+GITHUB_RELEASE_URL = COUNTRY_URLS[selected_country]
 
 # --- HELPER FUNCTIONS ---
 @st.cache_data(ttl=86400) # Cache exchange rates for a full 24 hours to speed up Halal checks
@@ -48,6 +64,10 @@ def is_valid_ticker(symbol):
 def load_data(file_path_or_url):
     try:
         data = pd.read_csv(file_path_or_url)
+        # sort by Symbol for easier lookup
+        if 'Symbol' in data.columns:
+            data.sort_values(by='Symbol', inplace=True)
+            data.reset_index(drop=True, inplace=True)
         if 'nc_income' in data.columns:
             data = data[data.nc_income != 'Not Found'].reset_index(drop=True)
         return data
@@ -163,10 +183,11 @@ def get_data(ticker_in, to_get_info):
         return ['Not Found'] * 9 
 
 
+
 # Load data early so sidebar can use live Industry options
 df_raw = load_data(GITHUB_RELEASE_URL)
 if df_raw.empty:
-    st.error("No data available. Please wait for the daily GitHub Action to generate the file.")
+    st.error(f"No data available for {selected_country}. Please wait for the daily GitHub Action to generate the file.")
     st.stop()
 
 st.sidebar.title('Screening Filters')
@@ -186,21 +207,28 @@ halal_check = st.sidebar.checkbox(
     help='Filter to only show stocks that pass all three Halal criteria (income ratio, cash, debt).'
 )
 
-st.sidebar.markdown('### Industry')
-enable_industry = st.sidebar.checkbox(
-    'Apply Industry filter',
-    value=False,
-    help='Enable to filter by industry.'
-)
-all_industries = sorted(df_raw['Industry'].dropna().astype(str).unique().tolist()) if 'Industry' in df_raw.columns else []
-if enable_industry:
-    selected_industries = st.sidebar.multiselect(
-        'Filter by Industry',
-        options=all_industries,
-        default=[],
-        help='Select one or more industries to narrow results. Leave empty to include all.'
+
+
+# --- Industry Filter: Hide if India selected ---
+if selected_country != "India" and 'Industry' in df_raw.columns:
+    st.sidebar.markdown('### Industry')
+    enable_industry = st.sidebar.checkbox(
+        'Apply Industry filter',
+        value=False,
+        help='Enable to filter by industry.'
     )
+    all_industries = sorted(df_raw['Industry'].dropna().astype(str).unique().tolist())
+    if enable_industry:
+        selected_industries = st.sidebar.multiselect(
+            'Filter by Industry',
+            options=all_industries,
+            default=[],
+            help='Select one or more industries to narrow results. Leave empty to include all.'
+        )
+    else:
+        selected_industries = []
 else:
+    enable_industry = False
     selected_industries = []
 
 st.sidebar.markdown('### Description Keywords')
