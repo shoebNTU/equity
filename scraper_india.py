@@ -240,7 +240,8 @@ def fetch_ticker_robust(ticker_in, to_get_info, max_retries=3):
                 time.sleep(sleep_time)
             else:
                 logger.warning(f"Failed completely for {ticker_in} after {max_retries} attempts: {e}")
-                return ['Not Found'] * len(to_get_info)
+                # Always return the correct number of columns (cols + to_get_info)
+                return ['Not Found'] * (len(cols) + len(to_get_info))
 
 
 # --- Use the same columns as scraper.py ---
