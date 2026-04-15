@@ -214,10 +214,8 @@ halal_check = st.sidebar.checkbox(
     help='Filter to only show stocks that pass all three Halal criteria (income ratio, cash, debt).'
 )
 
-
-
-# --- Industry Filter: Hide if India selected ---
-if selected_country != "India" and 'Industry' in df_raw.columns:
+ # --- Industry Filter: Always show if Industry column exists ---
+if 'Industry' in df_raw.columns:
     st.sidebar.markdown('### Industry')
     enable_industry = st.sidebar.checkbox(
         'Apply Industry filter',
